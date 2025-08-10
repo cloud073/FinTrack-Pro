@@ -128,7 +128,8 @@ def upload_csv(current_user):
         if not all(col in df.columns for col in required_columns):
             return jsonify({"error": f"CSV must contain columns: {', '.join(required_columns)}"}), 400
 
-        transactions = []
+        transactions_to_insert = []
+        transactions_preview = []
 
         for _, row in df.iterrows():
             try:
@@ -137,15 +138,15 @@ def upload_csv(current_user):
                 amount = float(row['Amount']) if pd.notnull(row['Amount']) else 0.0
                 category = predict_category(description)
 
-                txn = Transaction(
+                transactions_to_insert.append(Transaction(
                     user_id=current_user.id,
                     date=date_obj,
                     description=description,
                     amount=amount,
                     category=category
-                )
-                db.session.add(txn)
-                transactions.append({
+                ))
+
+                transactions_preview.append({
                     "date": str(date_obj),
                     "description": description,
                     "amount": amount,
@@ -155,12 +156,18 @@ def upload_csv(current_user):
                 print(f"Skipping row: {e}")
                 continue
 
-        db.session.commit()
-        return jsonify({"transactions": transactions}), 200
+        # 🔹 Commit in chunks of 1000 to avoid memory spike
+        chunk_size = 1000
+        for i in range(0, len(transactions_to_insert), chunk_size):
+            db.session.bulk_save_objects(transactions_to_insert[i:i+chunk_size])
+            db.session.commit()
+
+        return jsonify({"transactions": transactions_preview}), 200
 
     except Exception as e:
         print(e)
         return jsonify({"error": "Error processing the file"}), 500
+
 
 @app.route('/api/history', methods=['GET'])
 @token_required
