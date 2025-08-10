@@ -24,3 +24,4 @@ gunicorn
 scikit-learn
 joblib
 python-dotenv
+psycopg2-binary
