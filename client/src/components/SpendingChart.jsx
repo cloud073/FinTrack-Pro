@@ -14,6 +14,9 @@ import {
 import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Bar, Pie, Line, Doughnut } from "react-chartjs-2";
 
+// 📌 Environment variable (ready if you add API calls later)
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
+
 ChartJS.register(
   BarElement,
   ArcElement,

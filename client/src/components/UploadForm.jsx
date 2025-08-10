@@ -1,6 +1,9 @@
 import React, { useState } from "react";
 import axios from "axios";
 
+// 🔹 Use environment variable for base URL
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
+
 function UploadForm({ token, onUploadComplete }) {
   const [file, setFile] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -18,7 +21,7 @@ function UploadForm({ token, onUploadComplete }) {
     setUploading(true);
 
     try {
-      const res = await axios.post("https://fintrack-pro-server.onrender.com/api/upload-csv", formData, {
+      const res = await axios.post(`${API_BASE_URL}/api/upload-csv`, formData, {
         headers: {
           Authorization: token,
         },

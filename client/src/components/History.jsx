@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 
+// 🔹 Use environment variable for base URL
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
+
 function History({ token }) {
   const [history, setHistory] = useState([]);
 
   useEffect(() => {
     async function fetchHistory() {
       try {
-        const res = await axios.get("https://fintrack-pro-server.onrender.com/api/history", {
+        const res = await axios.get(`${API_BASE_URL}/api/history`, {
           headers: { Authorization: token },
         });
         setHistory(res.data.transactions); // updated key
@@ -30,7 +33,7 @@ function History({ token }) {
       }}
     >
       <h3 style={{ marginBottom: "1rem" }}>🕘 Transaction History</h3>
-      
+
       <div
         style={{
           maxHeight: "400px",
@@ -54,8 +57,11 @@ function History({ token }) {
                   fontSize: "0.95rem",
                 }}
               >
-                <strong>{txn.date}</strong> — {txn.description} — ₹{txn.amount.toFixed(2)} —{" "}
-                <span style={{ fontStyle: "italic", color: "#007bff" }}>{txn.category}</span>
+                <strong>{txn.date}</strong> — {txn.description} — ₹
+                {txn.amount.toFixed(2)} —{" "}
+                <span style={{ fontStyle: "italic", color: "#007bff" }}>
+                  {txn.category}
+                </span>
               </li>
             ))}
           </ul>
