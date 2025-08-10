@@ -7,7 +7,7 @@ function History({ token }) {
   useEffect(() => {
     async function fetchHistory() {
       try {
-        const res = await axios.get("http://localhost:5000/api/history", {
+        const res = await axios.get("https://fintrack-pro-server.onrender.com/api/history", {
           headers: { Authorization: token },
         });
         setHistory(res.data.transactions); // updated key

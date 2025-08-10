@@ -18,7 +18,7 @@ function UploadForm({ token, onUploadComplete }) {
     setUploading(true);
 
     try {
-      const res = await axios.post("http://localhost:5000/api/upload-csv", formData, {
+      const res = await axios.post("https://fintrack-pro-server.onrender.com/api/upload-csv", formData, {
         headers: {
           Authorization: token,
         },
