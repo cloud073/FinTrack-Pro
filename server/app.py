@@ -13,7 +13,9 @@ import os
 
 # --- App & Config ---
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization"])
+
 
 # Load variables from .env file
 load_dotenv()
