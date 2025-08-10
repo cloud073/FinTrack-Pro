@@ -233,7 +233,11 @@ def delete_all_transactions(current_user):
     return jsonify({'message': f'{deleted} transactions deleted successfully'})
 
 # --- Run Server ---
+# --- Ensure DB tables exist on every startup ---
+with app.app_context():
+    db.create_all()
+
+# --- Run Server (only for local dev) ---
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
     app.run(debug=True, host='0.0.0.0', port=5000)
+
