@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pandas as pd
@@ -8,39 +7,38 @@ from datetime import datetime, timedelta
 import jwt
 from functools import wraps
 from sqlalchemy import or_
-from categorizer import predict_category     # keep your existing categorizer
+from categorizer import predict_category
 from dotenv import load_dotenv
 import os
-import math
 import tempfile
+from io import TextIOWrapper
 
 # --- App & Config ---
 app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization"])
 
-# Allow CORS only for API routes (adjust origin in production)
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
-
-# Load environment variables from .env (or from environment in production)
+# Load variables from .env file (useful locally; Render uses env vars)
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY") or "super-secret-default"   # replace in prod via env
-DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///fintrack.db"  # fallback to sqlite for dev
+SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
+DATABASE_URL = os.getenv("DATABASE_URL", None)
 
-# App config
 app.config["SECRET_KEY"] = SECRET_KEY
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Allow larger uploads (e.g. 50 MB). Adjust depending on host limits.
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
+# Allow large uploads (example: 200 MB). Adjust as needed.
+app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200 MB
 
-# Initialize extensions
+# Optional: tune SQLAlchemy pool sizes if you expect many connections
+# app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_size": 5, "max_overflow": 10, "pool_timeout": 30}
+
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 
 # --- Models ---
 class User(db.Model):
-    __tablename__ = "users"   # explicit table name avoids reserved-word issues
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     email = db.Column(db.String(100), unique=True)
@@ -54,13 +52,12 @@ class User(db.Model):
         return bcrypt.check_password_hash(self.password_hash, password)
 
 class Transaction(db.Model):
-    __tablename__ = "transactions"
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, nullable=False, index=True)
-    date = db.Column(db.Date, nullable=False, index=True)
+    user_id = db.Column(db.Integer, nullable=False)
+    date = db.Column(db.Date, nullable=False)
     description = db.Column(db.Text)
-    amount = db.Column(db.Numeric(12, 2))
-    category = db.Column(db.String(100), index=True)
+    amount = db.Column(db.Numeric(13, 2))
+    category = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
 # --- JWT Decorator ---
@@ -71,14 +68,15 @@ def token_required(f):
         if not token:
             return jsonify({"error": "Token missing"}), 401
         try:
+            # If token comes as "Bearer <token>", handle that:
+            if token.startswith("Bearer "):
+                token = token.split(" ", 1)[1]
             decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
             current_user = User.query.get(decoded['user_id'])
             if not current_user:
                 return jsonify({"error": "User not found"}), 401
-        except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Token expired"}), 401
         except Exception as e:
-            app.logger.exception("Token decode error")
+            app.logger.exception("Token decode/validation error")
             return jsonify({"error": "Invalid or expired token"}), 401
         return f(current_user, *args, **kwargs)
     return decorated
@@ -86,9 +84,9 @@ def token_required(f):
 # --- Auth Routes ---
 @app.route('/api/register', methods=['POST'])
 def register():
-    data = request.get_json() or {}
+    data = request.json or {}
     if not data.get('username') or not data.get('password'):
-        return jsonify({"error": "username and password required"}), 400
+        return jsonify({"error": "Username and password are required"}), 400
 
     if User.query.filter_by(username=data['username']).first():
         return jsonify({"error": "User already exists"}), 400
@@ -101,9 +99,9 @@ def register():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    data = request.get_json() or {}
+    data = request.json or {}
     if not data.get('username') or not data.get('password'):
-        return jsonify({"error": "username and password required"}), 400
+        return jsonify({"error": "Username and password are required"}), 400
 
     user = User.query.filter(
         or_(User.username == data['username'], User.email == data['username'])
@@ -114,7 +112,7 @@ def login():
 
     token = jwt.encode({
         "user_id": user.id,
-        "exp": datetime.utcnow() + timedelta(hours=6)   # longer token for usability
+        "exp": datetime.utcnow() + timedelta(hours=4)  # longer expiry if you want
     }, SECRET_KEY, algorithm="HS256")
 
     return jsonify({"token": token})
@@ -124,16 +122,11 @@ def login():
 def hello():
     return jsonify({"message": "Hello from Flask!"})
 
-# --- Upload CSV ---
+# --- Upload CSV (chunked / streaming) ---
 @app.route('/api/upload-csv', methods=['POST'])
 @token_required
 def upload_csv(current_user):
-    """
-    1) Accept file upload
-    2) Read via pandas (with encoding fallback)
-    3) Validate columns
-    4) Create Transaction objects and bulk insert in chunks
-    """
+    # Expect a multipart/form-data with "file" field
     if 'file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
@@ -141,124 +134,131 @@ def upload_csv(current_user):
     if file.filename == '':
         return jsonify({"error": "Empty file name"}), 400
 
-    # Save temporarily in case pandas needs to reopen the file
+    # Save uploaded file to a temporary file to avoid loading entire file in memory
     try:
-        tmp = tempfile.NamedTemporaryFile(delete=False)
-        file.save(tmp.name)
-        tmp.flush()
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
     except Exception as e:
-        app.logger.exception("Failed to save uploaded file")
-        return jsonify({"error": "Failed to save uploaded file"}), 500
+        app.logger.exception("Failed to write uploaded file to temp")
+        return jsonify({"error": "Failed to process uploaded file"}), 500
+
+    required_columns = ['Date', 'Description', 'Amount']
+    transactions_response = []   # collect a few examples or counts to return
+
+    # Process CSV in chunks to support large files
+    try:
+        # Attempt reading in text mode with utf-8; fallback to latin-1 if necessary
+        # Use iterator to process chunks
+        chunk_iter = pd.read_csv(tmp_path, chunksize=1000, iterator=True, dtype=str)
+    except Exception as e:
+        # try with different encoding
+        try:
+            chunk_iter = pd.read_csv(tmp_path, chunksize=1000, iterator=True, encoding='ISO-8859-1', dtype=str)
+        except Exception as e2:
+            app.logger.exception("Failed to open CSV in any encoding")
+            return jsonify({"error": "Failed to read CSV file"}), 400
+
+    total_inserted = 0
+    failed_rows = 0
+    bulk_batch = []
+    BATCH_SIZE = 1000   # adjust based on DB and memory
 
     try:
-        try:
-            df = pd.read_csv(tmp.name)
-        except UnicodeDecodeError:
-            df = pd.read_csv(tmp.name, encoding='ISO-8859-1')
-        except Exception as e:
-            app.logger.exception("pandas read_csv error")
-            return jsonify({"error": "Failed to parse CSV file"}), 400
+        for chunk in chunk_iter:
+            # Ensure required columns are present in this chunk
+            if not all(col in chunk.columns for col in required_columns):
+                return jsonify({"error": f"CSV must contain columns: {', '.join(required_columns)}"}), 400
 
-        required_columns = ['Date', 'Description', 'Amount']
-        if not all(col in df.columns for col in required_columns):
-            return jsonify({"error": f"CSV must contain columns: {', '.join(required_columns)}"}), 400
-
-        transactions_to_insert = []
-        preview_list = []
-
-        # iterate rows (vectorized methods might be faster but we need category per description)
-        for idx, row in df.iterrows():
-            try:
-                # Robust date parsing
-                date_obj = pd.to_datetime(row['Date'], errors='coerce')
-                if pd.isna(date_obj):
-                    # skip rows with invalid date
-                    app.logger.debug(f"Skipping row {idx}: invalid date -> {row.get('Date')}")
-                    continue
-                date_obj = date_obj.date()
-
-                description = str(row['Description']) if not pd.isna(row['Description']) else ""
-                amount = float(row['Amount']) if pd.notnull(row['Amount']) else 0.0
-
-                # run your categorizer
+            # Iterate rows in chunk
+            for _, row in chunk.iterrows():
                 try:
+                    # parse date safely
+                    date_obj = pd.to_datetime(row['Date'], errors='coerce')
+                    if pd.isnull(date_obj):
+                        raise ValueError("Invalid date")
+                    date_obj = date_obj.date()
+
+                    description = str(row.get('Description', '')).strip()
+                    # amount cleaning: replace commas, currency symbols etc.
+                    raw_amount = str(row.get('Amount', '')).replace(',', '').replace('$', '').strip()
+                    if raw_amount == '':
+                        amount = 0.0
+                    else:
+                        amount = float(raw_amount)
+
                     category = predict_category(description)
-                except Exception:
-                    category = "Uncategorized"
 
-                transactions_to_insert.append(Transaction(
-                    user_id=current_user.id,
-                    date=date_obj,
-                    description=description,
-                    amount=amount,
-                    category=category
-                ))
+                    txn = Transaction(
+                        user_id=current_user.id,
+                        date=date_obj,
+                        description=description,
+                        amount=amount,
+                        category=category
+                    )
+                    bulk_batch.append(txn)
+                    # Optionally record a small sample for response:
+                    if len(transactions_response) < 10:
+                        transactions_response.append({
+                            "date": str(date_obj),
+                            "description": description,
+                            "amount": amount,
+                            "category": category
+                        })
 
-                # small preview to return to frontend
-                preview_list.append({
-                    "date": str(date_obj),
-                    "description": description,
-                    "amount": amount,
-                    "category": category
-                })
-            except Exception as e:
-                app.logger.exception("Skipping row due to error")
-                continue
+                    # Bulk insert when batch full
+                    if len(bulk_batch) >= BATCH_SIZE:
+                        db.session.bulk_save_objects(bulk_batch)
+                        db.session.commit()
+                        total_inserted += len(bulk_batch)
+                        bulk_batch = []
 
-        # Insert in chunks to avoid long single transactions / memory spikes.
-        chunk_size = 1000
-        total = len(transactions_to_insert)
-        if total > 0:
-            for i in range(0, total, chunk_size):
-                chunk = transactions_to_insert[i:i+chunk_size]
-                db.session.bulk_save_objects(chunk)
-                db.session.commit()
+                except Exception as e:
+                    failed_rows += 1
+                    app.logger.exception(f"Skipping bad row: {e}")
+                    continue
 
-        return jsonify({"transactions": preview_list, "inserted": total}), 200
+        # Insert any remaining rows
+        if bulk_batch:
+            db.session.bulk_save_objects(bulk_batch)
+            db.session.commit()
+            total_inserted += len(bulk_batch)
 
     except Exception as e:
-        app.logger.exception("Error processing upload")
-        return jsonify({"error": "Error processing the file"}), 500
+        app.logger.exception("Error while processing CSV chunks")
+        return jsonify({"error": "Error processing the CSV file"}), 500
     finally:
+        # Clean up temporary file
         try:
-            os.unlink(tmp.name)
+            os.remove(tmp_path)
         except Exception:
             pass
 
-# --- History ---
+    return jsonify({
+        "message": "CSV processed",
+        "inserted": total_inserted,
+        "failed_rows": failed_rows,
+        "sample": transactions_response
+    }), 200
+
+# --- History, Summary, Delete endpoints remain mostly unchanged ---
 @app.route('/api/history', methods=['GET'])
 @token_required
 def get_history(current_user):
-    """
-    Query params:
-      - page (int) : page number for pagination (default 1)
-      - limit (int | 'all') : number per page or 'all'
-      - category (str) optional filter by category
-    """
     page = request.args.get('page', 1, type=int)
     limit_param = request.args.get('limit', '1000')
-    category_filter = request.args.get('category', None)
 
-    query = Transaction.query.filter_by(user_id=current_user.id)
+    query = Transaction.query.filter_by(user_id=current_user.id).order_by(Transaction.date.desc())
 
-    if category_filter:
-        query = query.filter(Transaction.category == category_filter)
-
-    query = query.order_by(Transaction.date.desc())
-
-    if isinstance(limit_param, str) and limit_param.lower() == 'all':
-        items = query.all()
-        total = len(items)
-        pages = 1
-    else:
+    if limit_param.lower() != 'all':
         try:
             per_page = int(limit_param)
             paginated = query.paginate(page=page, per_page=per_page, error_out=False)
             items = paginated.items
-            total = paginated.total
-            pages = paginated.pages
         except ValueError:
             return jsonify({"error": "Invalid limit value"}), 400
+    else:
+        items = query.all()
 
     result = [{
         "id": txn.id,
@@ -270,12 +270,12 @@ def get_history(current_user):
 
     return jsonify({
         "transactions": result,
-        "total": total,
+        "total": len(result),
         "page": page,
-        "pages": pages
-    }), 200
+        "pages": 1
+    })
 
-# --- Summary ---
+
 @app.route('/api/summary', methods=['GET'])
 @token_required
 def summary(current_user):
@@ -286,13 +286,12 @@ def summary(current_user):
             .group_by(Transaction.category)
             .all()
         )
-        summary_data = [{"category": cat if cat else "Uncategorized", "total": float(total)} for cat, total in results]
+        summary_data = [{"category": cat, "total": float(total)} for cat, total in results]
         return jsonify({"summary": summary_data}), 200
     except Exception as e:
-        app.logger.exception("Failed to generate summary")
+        app.logger.exception("Summary generation failed")
         return jsonify({"error": "Failed to generate summary"}), 500
 
-# --- Delete Single Transaction ---
 @app.route('/api/delete-transaction/<int:txn_id>', methods=['DELETE'])
 @token_required
 def delete_transaction(current_user, txn_id):
@@ -301,20 +300,19 @@ def delete_transaction(current_user, txn_id):
         return jsonify({'error': 'Transaction not found'}), 404
     db.session.delete(txn)
     db.session.commit()
-    return jsonify({'message': 'Transaction deleted successfully'}), 200
+    return jsonify({'message': 'Transaction deleted successfully'})
 
-# --- Delete All Transactions ---
 @app.route('/api/delete-all-transactions', methods=['DELETE'])
 @token_required
 def delete_all_transactions(current_user):
     deleted = Transaction.query.filter_by(user_id=current_user.id).delete()
     db.session.commit()
-    return jsonify({'message': f'{deleted} transactions deleted successfully'}), 200
+    return jsonify({'message': f'{deleted} transactions deleted successfully'})
 
 # --- Ensure DB tables exist on every startup ---
 with app.app_context():
     db.create_all()
 
-# --- Run Server (development) ---
+# --- Run Server (only for local dev) ---
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
