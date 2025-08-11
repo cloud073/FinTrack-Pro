@@ -11,7 +11,6 @@ from categorizer import predict_category
 from dotenv import load_dotenv
 import os
 import tempfile
-from io import TextIOWrapper
 
 # --- App & Config ---
 app = Flask(__name__)
@@ -30,9 +29,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Allow large uploads (example: 200 MB). Adjust as needed.
 app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200 MB
-
-# Optional: tune SQLAlchemy pool sizes if you expect many connections
-# app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_size": 5, "max_overflow": 10, "pool_timeout": 30}
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
@@ -68,14 +64,13 @@ def token_required(f):
         if not token:
             return jsonify({"error": "Token missing"}), 401
         try:
-            # If token comes as "Bearer <token>", handle that:
             if token.startswith("Bearer "):
                 token = token.split(" ", 1)[1]
             decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
             current_user = User.query.get(decoded['user_id'])
             if not current_user:
                 return jsonify({"error": "User not found"}), 401
-        except Exception as e:
+        except Exception:
             app.logger.exception("Token decode/validation error")
             return jsonify({"error": "Invalid or expired token"}), 401
         return f(current_user, *args, **kwargs)
@@ -112,7 +107,7 @@ def login():
 
     token = jwt.encode({
         "user_id": user.id,
-        "exp": datetime.utcnow() + timedelta(hours=4)  # longer expiry if you want
+        "exp": datetime.utcnow() + timedelta(hours=4)
     }, SECRET_KEY, algorithm="HS256")
 
     return jsonify({"token": token})
@@ -126,7 +121,6 @@ def hello():
 @app.route('/api/upload-csv', methods=['POST'])
 @token_required
 def upload_csv(current_user):
-    # Expect a multipart/form-data with "file" field
     if 'file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
@@ -134,58 +128,60 @@ def upload_csv(current_user):
     if file.filename == '':
         return jsonify({"error": "Empty file name"}), 400
 
-    # Save uploaded file to a temporary file to avoid loading entire file in memory
     try:
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             file.save(tmp.name)
             tmp_path = tmp.name
-    except Exception as e:
+    except Exception:
         app.logger.exception("Failed to write uploaded file to temp")
         return jsonify({"error": "Failed to process uploaded file"}), 500
 
     required_columns = ['Date', 'Description', 'Amount']
-    transactions_response = []   # collect a few examples or counts to return
+    transactions_response = []
 
-    # Process CSV in chunks to support large files
     try:
-        # Attempt reading in text mode with utf-8; fallback to latin-1 if necessary
-        # Use iterator to process chunks
-        chunk_iter = pd.read_csv(tmp_path, chunksize=1000, iterator=True, dtype=str)
-    except Exception as e:
-        # try with different encoding
+        chunk_iter = pd.read_csv(
+            tmp_path,
+            chunksize=200,
+            iterator=True,
+            dtype=str,
+            usecols=required_columns
+        )
+    except Exception:
         try:
-            chunk_iter = pd.read_csv(tmp_path, chunksize=1000, iterator=True, encoding='ISO-8859-1', dtype=str)
-        except Exception as e2:
+            chunk_iter = pd.read_csv(
+                tmp_path,
+                chunksize=200,
+                iterator=True,
+                encoding='ISO-8859-1',
+                dtype=str,
+                usecols=required_columns
+            )
+        except Exception:
             app.logger.exception("Failed to open CSV in any encoding")
             return jsonify({"error": "Failed to read CSV file"}), 400
 
     total_inserted = 0
     failed_rows = 0
     bulk_batch = []
-    BATCH_SIZE = 1000   # adjust based on DB and memory
+    BATCH_SIZE = 1000
 
     try:
         for chunk in chunk_iter:
-            # Ensure required columns are present in this chunk
             if not all(col in chunk.columns for col in required_columns):
                 return jsonify({"error": f"CSV must contain columns: {', '.join(required_columns)}"}), 400
 
-            # Iterate rows in chunk
-            for _, row in chunk.iterrows():
+            for row in chunk.itertuples(index=False):
                 try:
-                    # parse date safely
-                    date_obj = pd.to_datetime(row['Date'], errors='coerce')
+                    date_obj = pd.to_datetime(row.Date, errors='coerce')
                     if pd.isnull(date_obj):
                         raise ValueError("Invalid date")
                     date_obj = date_obj.date()
 
-                    description = str(row.get('Description', '')).strip()
-                    # amount cleaning: replace commas, currency symbols etc.
-                    raw_amount = str(row.get('Amount', '')).replace(',', '').replace('$', '').strip()
-                    if raw_amount == '':
-                        amount = 0.0
-                    else:
-                        amount = float(raw_amount)
+                    description = str(row.Description).strip()
+
+                    raw_amount = str(row.Amount).replace(',', '').replace('$', '').strip()
+                    amount = float(raw_amount) if raw_amount else 0.0
 
                     category = predict_category(description)
 
@@ -197,7 +193,7 @@ def upload_csv(current_user):
                         category=category
                     )
                     bulk_batch.append(txn)
-                    # Optionally record a small sample for response:
+
                     if len(transactions_response) < 10:
                         transactions_response.append({
                             "date": str(date_obj),
@@ -206,29 +202,26 @@ def upload_csv(current_user):
                             "category": category
                         })
 
-                    # Bulk insert when batch full
                     if len(bulk_batch) >= BATCH_SIZE:
                         db.session.bulk_save_objects(bulk_batch)
                         db.session.commit()
                         total_inserted += len(bulk_batch)
                         bulk_batch = []
 
-                except Exception as e:
+                except Exception:
                     failed_rows += 1
-                    app.logger.exception(f"Skipping bad row: {e}")
+                    app.logger.exception("Skipping bad row")
                     continue
 
-        # Insert any remaining rows
         if bulk_batch:
             db.session.bulk_save_objects(bulk_batch)
             db.session.commit()
             total_inserted += len(bulk_batch)
 
-    except Exception as e:
+    except Exception:
         app.logger.exception("Error while processing CSV chunks")
         return jsonify({"error": "Error processing the CSV file"}), 500
     finally:
-        # Clean up temporary file
         try:
             os.remove(tmp_path)
         except Exception:
@@ -241,7 +234,7 @@ def upload_csv(current_user):
         "sample": transactions_response
     }), 200
 
-# --- History, Summary, Delete endpoints remain mostly unchanged ---
+# --- History ---
 @app.route('/api/history', methods=['GET'])
 @token_required
 def get_history(current_user):
@@ -275,7 +268,7 @@ def get_history(current_user):
         "pages": 1
     })
 
-
+# --- Summary ---
 @app.route('/api/summary', methods=['GET'])
 @token_required
 def summary(current_user):
@@ -288,10 +281,11 @@ def summary(current_user):
         )
         summary_data = [{"category": cat, "total": float(total)} for cat, total in results]
         return jsonify({"summary": summary_data}), 200
-    except Exception as e:
+    except Exception:
         app.logger.exception("Summary generation failed")
         return jsonify({"error": "Failed to generate summary"}), 500
 
+# --- Delete Transaction ---
 @app.route('/api/delete-transaction/<int:txn_id>', methods=['DELETE'])
 @token_required
 def delete_transaction(current_user, txn_id):
@@ -302,6 +296,7 @@ def delete_transaction(current_user, txn_id):
     db.session.commit()
     return jsonify({'message': 'Transaction deleted successfully'})
 
+# --- Delete All Transactions ---
 @app.route('/api/delete-all-transactions', methods=['DELETE'])
 @token_required
 def delete_all_transactions(current_user):
@@ -309,10 +304,10 @@ def delete_all_transactions(current_user):
     db.session.commit()
     return jsonify({'message': f'{deleted} transactions deleted successfully'})
 
-# --- Ensure DB tables exist on every startup ---
+# --- Ensure DB tables exist on startup ---
 with app.app_context():
     db.create_all()
 
-# --- Run Server (only for local dev) ---
+# --- Run Server ---
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
