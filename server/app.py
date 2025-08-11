@@ -129,110 +129,55 @@ def upload_csv(current_user):
         return jsonify({"error": "Empty file name"}), 400
 
     try:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            file.save(tmp.name)
-            tmp_path = tmp.name
-    except Exception:
-        app.logger.exception("Failed to write uploaded file to temp")
-        return jsonify({"error": "Failed to process uploaded file"}), 500
-
-    required_columns = ['Date', 'Description', 'Amount']
-    transactions_response = []
-
-    try:
-        chunk_iter = pd.read_csv(
-            tmp_path,
-            chunksize=200,
-            iterator=True,
-            dtype=str,
-            usecols=required_columns
-        )
-    except Exception:
         try:
-            chunk_iter = pd.read_csv(
-                tmp_path,
-                chunksize=200,
-                iterator=True,
-                encoding='ISO-8859-1',
-                dtype=str,
-                usecols=required_columns
-            )
-        except Exception:
-            app.logger.exception("Failed to open CSV in any encoding")
-            return jsonify({"error": "Failed to read CSV file"}), 400
+            df = pd.read_csv(file)
+        except UnicodeDecodeError:
+            file.stream.seek(0)
+            df = pd.read_csv(file, encoding='ISO-8859-1')
 
-    total_inserted = 0
-    failed_rows = 0
-    bulk_batch = []
-    BATCH_SIZE = 1000
+        required_columns = ['Date', 'Description', 'Amount']
+        if not all(col in df.columns for col in required_columns):
+            return jsonify({"error": f"CSV must contain columns: {', '.join(required_columns)}"}), 400
 
-    try:
-        for chunk in chunk_iter:
-            if not all(col in chunk.columns for col in required_columns):
-                return jsonify({"error": f"CSV must contain columns: {', '.join(required_columns)}"}), 400
+        transactions_to_insert = []
+        transactions_preview = []
 
-            for row in chunk.itertuples(index=False):
-                try:
-                    date_obj = pd.to_datetime(row.Date, errors='coerce')
-                    if pd.isnull(date_obj):
-                        raise ValueError("Invalid date")
-                    date_obj = date_obj.date()
+        for _, row in df.iterrows():
+            try:
+                date_obj = pd.to_datetime(row['Date']).date()
+                description = str(row['Description'])
+                amount = float(row['Amount']) if pd.notnull(row['Amount']) else 0.0
+                category = predict_category(description)
 
-                    description = str(row.Description).strip()
+                transactions_to_insert.append(Transaction(
+                    user_id=current_user.id,
+                    date=date_obj,
+                    description=description,
+                    amount=amount,
+                    category=category
+                ))
 
-                    raw_amount = str(row.Amount).replace(',', '').replace('$', '').strip()
-                    amount = float(raw_amount) if raw_amount else 0.0
+                transactions_preview.append({
+                    "date": str(date_obj),
+                    "description": description,
+                    "amount": amount,
+                    "category": category
+                })
+            except Exception as e:
+                print(f"Skipping row: {e}")
+                continue
 
-                    category = predict_category(description)
-
-                    txn = Transaction(
-                        user_id=current_user.id,
-                        date=date_obj,
-                        description=description,
-                        amount=amount,
-                        category=category
-                    )
-                    bulk_batch.append(txn)
-
-                    if len(transactions_response) < 10:
-                        transactions_response.append({
-                            "date": str(date_obj),
-                            "description": description,
-                            "amount": amount,
-                            "category": category
-                        })
-
-                    if len(bulk_batch) >= BATCH_SIZE:
-                        db.session.bulk_save_objects(bulk_batch)
-                        db.session.commit()
-                        total_inserted += len(bulk_batch)
-                        bulk_batch = []
-
-                except Exception:
-                    failed_rows += 1
-                    app.logger.exception("Skipping bad row")
-                    continue
-
-        if bulk_batch:
-            db.session.bulk_save_objects(bulk_batch)
+        # 🔹 Commit in chunks of 1000 to avoid memory spike
+        chunk_size = 1000
+        for i in range(0, len(transactions_to_insert), chunk_size):
+            db.session.bulk_save_objects(transactions_to_insert[i:i+chunk_size])
             db.session.commit()
-            total_inserted += len(bulk_batch)
 
-    except Exception:
-        app.logger.exception("Error while processing CSV chunks")
-        return jsonify({"error": "Error processing the CSV file"}), 500
-    finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+        return jsonify({"transactions": transactions_preview}), 200
 
-    return jsonify({
-        "message": "CSV processed",
-        "inserted": total_inserted,
-        "failed_rows": failed_rows,
-        "sample": transactions_response
-    }), 200
+    except Exception as e:
+        print(e)
+        return jsonify({"error": "Error processing the file"}), 500
 
 # --- History ---
 @app.route('/api/history', methods=['GET'])
