@@ -10,25 +10,22 @@ from sqlalchemy import or_
 from categorizer import predict_category
 from dotenv import load_dotenv
 import os
-import tempfile
 
 # --- App & Config ---
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True,
      allow_headers=["Content-Type", "Authorization"])
 
-# Load variables from .env file (useful locally; Render uses env vars)
+# Load variables from .env file
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
-DATABASE_URL = os.getenv("DATABASE_URL", None)
+SECRET_KEY = os.getenv("SECRET_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 app.config["SECRET_KEY"] = SECRET_KEY
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Allow large uploads (example: 200 MB). Adjust as needed.
-app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200 MB
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
@@ -52,7 +49,7 @@ class Transaction(db.Model):
     user_id = db.Column(db.Integer, nullable=False)
     date = db.Column(db.Date, nullable=False)
     description = db.Column(db.Text)
-    amount = db.Column(db.Numeric(13, 2))
+    amount = db.Column(db.Numeric(10, 2))
     category = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
@@ -64,14 +61,11 @@ def token_required(f):
         if not token:
             return jsonify({"error": "Token missing"}), 401
         try:
-            if token.startswith("Bearer "):
-                token = token.split(" ", 1)[1]
             decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
             current_user = User.query.get(decoded['user_id'])
             if not current_user:
                 return jsonify({"error": "User not found"}), 401
         except Exception:
-            app.logger.exception("Token decode/validation error")
             return jsonify({"error": "Invalid or expired token"}), 401
         return f(current_user, *args, **kwargs)
     return decorated
@@ -79,10 +73,7 @@ def token_required(f):
 # --- Auth Routes ---
 @app.route('/api/register', methods=['POST'])
 def register():
-    data = request.json or {}
-    if not data.get('username') or not data.get('password'):
-        return jsonify({"error": "Username and password are required"}), 400
-
+    data = request.json
     if User.query.filter_by(username=data['username']).first():
         return jsonify({"error": "User already exists"}), 400
 
@@ -94,10 +85,7 @@ def register():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    data = request.json or {}
-    if not data.get('username') or not data.get('password'):
-        return jsonify({"error": "Username and password are required"}), 400
-
+    data = request.json
     user = User.query.filter(
         or_(User.username == data['username'], User.email == data['username'])
     ).first()
@@ -107,7 +95,7 @@ def login():
 
     token = jwt.encode({
         "user_id": user.id,
-        "exp": datetime.utcnow() + timedelta(hours=4)
+        "exp": datetime.utcnow() + timedelta(hours=1)
     }, SECRET_KEY, algorithm="HS256")
 
     return jsonify({"token": token})
@@ -117,7 +105,7 @@ def login():
 def hello():
     return jsonify({"message": "Hello from Flask!"})
 
-# --- Upload CSV (chunked / streaming) ---
+# --- Upload CSV ---
 @app.route('/api/upload-csv', methods=['POST'])
 @token_required
 def upload_csv(current_user):
@@ -139,8 +127,7 @@ def upload_csv(current_user):
         if not all(col in df.columns for col in required_columns):
             return jsonify({"error": f"CSV must contain columns: {', '.join(required_columns)}"}), 400
 
-        transactions_to_insert = []
-        transactions_preview = []
+        transactions = []
 
         for _, row in df.iterrows():
             try:
@@ -149,15 +136,15 @@ def upload_csv(current_user):
                 amount = float(row['Amount']) if pd.notnull(row['Amount']) else 0.0
                 category = predict_category(description)
 
-                transactions_to_insert.append(Transaction(
+                txn = Transaction(
                     user_id=current_user.id,
                     date=date_obj,
                     description=description,
                     amount=amount,
                     category=category
-                ))
-
-                transactions_preview.append({
+                )
+                db.session.add(txn)
+                transactions.append({
                     "date": str(date_obj),
                     "description": description,
                     "amount": amount,
@@ -167,19 +154,13 @@ def upload_csv(current_user):
                 print(f"Skipping row: {e}")
                 continue
 
-        # 🔹 Commit in chunks of 1000 to avoid memory spike
-        chunk_size = 1000
-        for i in range(0, len(transactions_to_insert), chunk_size):
-            db.session.bulk_save_objects(transactions_to_insert[i:i+chunk_size])
-            db.session.commit()
-
-        return jsonify({"transactions": transactions_preview}), 200
+        db.session.commit()
+        return jsonify({"transactions": transactions}), 200
 
     except Exception as e:
         print(e)
         return jsonify({"error": "Error processing the file"}), 500
 
-# --- History ---
 @app.route('/api/history', methods=['GET'])
 @token_required
 def get_history(current_user):
@@ -213,6 +194,7 @@ def get_history(current_user):
         "pages": 1
     })
 
+
 # --- Summary ---
 @app.route('/api/summary', methods=['GET'])
 @token_required
@@ -226,11 +208,11 @@ def summary(current_user):
         )
         summary_data = [{"category": cat, "total": float(total)} for cat, total in results]
         return jsonify({"summary": summary_data}), 200
-    except Exception:
-        app.logger.exception("Summary generation failed")
+    except Exception as e:
+        print(e)
         return jsonify({"error": "Failed to generate summary"}), 500
 
-# --- Delete Transaction ---
+# --- Delete Single Transaction ---
 @app.route('/api/delete-transaction/<int:txn_id>', methods=['DELETE'])
 @token_required
 def delete_transaction(current_user, txn_id):
