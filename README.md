@@ -12,7 +12,7 @@
 🔗 **Website:** [sonisales.com](https://sonisales.com)  
 *(Frontend hosted on Vercel, Backend API powered by Render)*  
 
-**⚠️ Note:** On first registration, after clicking the **Register** button, please wait **at least 1 minute** before the action completes.  
+**⚠️ Note:** On first registration, after clicking the **Register** button, please wait **1-2 minutes** before the action completes.  
 This delay is due to the free-tier hosting on Render, where the server may need to spin up from an idle state.
 
 ---
@@ -151,3 +151,15 @@ FinTrack Pro is optimized for **big datasets**:
 👨‍💻 **Author:**  
 VINIT CHANDRAPRAKASH SONI  
 🌐 sonisales.com • 💻 GitHub
+
+---
+
+## 📜 License & Copyright
+
+© 2025 Vinit Chandraprakash Soni.  
+All rights reserved.  
+
+Unauthorized copying, reproduction, or distribution of this project,  
+via any medium, is strictly prohibited without the author's consent.  
+
+---
