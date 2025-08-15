@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 
 # Save path and settings
 save_path = "/home/vinit-soni/Desktop/PROJECTS/FinTrack-Pro/docs"
-file_name = "sample10k.csv"
-num_rows = 10000
+file_name = "sample4(1k).csv"
+num_rows = 1000
 full_path = os.path.join(save_path, file_name)
 
 # Category → relevant descriptions
