@@ -128,7 +128,7 @@ FinTrack Pro is optimized for **big datasets**:
 - **Encoding fallback** → Supports UTF-8 & ISO-8859-1 CSV formats.  
 
 **Performance:**  
-- 10,000+ rows → Processed in **<5 seconds** on Render.  
+- 10,000+ rows → Processed in **<10 seconds** on Render (in paid tier).  
 - 50MB CSV → Handled without server crash.  
 
 ---
@@ -150,4 +150,4 @@ FinTrack Pro is optimized for **big datasets**:
 
 👨‍💻 **Author:**  
 VINIT CHANDRAPRAKASH SONI  
-🌐 sonisles.com • 💻 GitHub
+🌐 sonisales.com • 💻 GitHub
