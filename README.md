@@ -2,20 +2,28 @@
 
 > **Your smart, secure, and modern solution for tracking, analyzing, and managing personal finances.**
 
-![FinTrack Pro Dashboard](https://via.placeholder.com/1200x600?text=Dashboard+Screenshot)
+<p align="center">
+  <img src="assets/dashboard.png" alt="FinTrack Pro Dashboard">
+</p>
 
 ---
 
 ## 🚀 Live Demo
 🔗 **Website:** [sonisales.com](https://sonisales.com)  
-*(Frontend hosted on Vercel, Backend API powered by Render)*
+*(Frontend hosted on Vercel, Backend API powered by Render)*  
+
+**⚠️ Note:** On first registration, after clicking the **Register** button, please wait **at least 1 minute** before the action completes.  
+This delay is due to the free-tier hosting on Render, where the server may need to spin up from an idle state.
 
 ---
 
 ## ✨ Features
 
 ### 🔐 Authentication
-![Login Page](https://via.placeholder.com/800x400?text=Login+Page+Screenshot)  
+<p align="center">
+  <img src="assets/login.png" alt="Login Page">
+</p>  
+
 - Secure **user registration** and **login**.
 - Passwords hashed using **Flask-Bcrypt**.
 - **JWT-based authentication** for all protected API routes.
@@ -23,7 +31,10 @@
 ---
 
 ### 📁 CSV Upload & Auto Categorization
-![CSV Upload](https://via.placeholder.com/800x400?text=CSV+Upload+Screenshot)  
+<p align="center">
+  <img src="assets/sampleUpload.png" alt="CSV Upload">
+</p>  
+
 - Upload **bank transaction CSV files** with columns:  
   `Date, Description, Amount`
 - Automatic expense categorization using the **`predict_category`** model.
@@ -32,7 +43,12 @@
 ---
 
 ### 📜 Transaction Management
-![Transaction History](https://via.placeholder.com/800x400?text=Transaction+History+Screenshot)  
+<p align="center">
+  <img src="assets/sampleHistory.png" alt="Transaction History">
+  <img src="assets/sampleHistory2.png" alt="Transaction History Page 2">
+  <img src="assets/sampleHistory3.png" alt="Transaction History Page 3">
+</p>  
+
 - View **paginated transaction history**.
 - **Delete** single transactions or **clear all** instantly.
 - Search, filter, and sort transactions directly from the UI.
@@ -40,7 +56,15 @@
 ---
 
 ### 📈 Summary & Analytics
-![Spending Summary](https://via.placeholder.com/800x400?text=Summary+Chart+Screenshot)  
+<p align="center">
+  <img src="assets/sampleAnalytics.png" alt="Spending Summary 1">
+  <img src="assets/sampleAnalytics2.png" alt="Spending Summary 2">
+  <img src="assets/sampleAnalytics3.png" alt="Spending Summary 3">
+  <img src="assets/sampleAnalytics4.png" alt="Spending Summary 4">
+  <img src="assets/sampleAnalytics5.png" alt="Spending Summary 5">
+  <img src="assets/sampleAnalytics6.png" alt="Spending Summary 6">
+</p>  
+
 - Category-wise **spending summaries**.
 - Seamless integration with **charts** for visual analytics.
 - Export data for **budgeting reports**.
@@ -71,22 +95,27 @@
 
 ## 📂 Project Structure
 
+```plaintext
 fintrack-pro/
 │
-├── backend/
-│ ├── app.py # Main Flask app
-│ ├── categorizer.py # Category prediction logic
-│ ├── requirements.txt # Backend dependencies
-│ ├── .env # Environment variables
-│ └── ...
-│
-├── frontend/
-│ ├── src/ # React source code
-│ ├── public/ # Static assets
-│ └── package.json # Frontend dependencies
-│
-└── README.md
-
+├── server/          # 🖥 Flask API backend
+├── client/          # 🎨 React frontend
+├── docs/            # 📄 Sample csv files
+├── assets/          # 🖼 Project screenshots
+│   ├── dashboard.png
+│   ├── login.png
+│   ├── sampleUpload.png
+│   ├── sampleHistory.png
+│   ├── sampleHistory2.png
+│   ├── sampleHistory3.png
+│   ├── sampleAnalytics.png
+│   ├── sampleAnalytics2.png
+│   ├── sampleAnalytics3.png
+│   ├── sampleAnalytics4.png
+│   ├── sampleAnalytics5.png
+│   ├── sampleAnalytics6.png
+└── README.md       
+```
 
 ---
 
@@ -119,18 +148,6 @@ FinTrack Pro is optimized for **big datasets**:
 
 ---
 
-👨‍💻 Author
-VINIT CHANDRAPRAKASH SONI
+👨‍💻 **Author:**  
+VINIT CHANDRAPRAKASH SONI  
 🌐 sonisles.com • 💻 GitHub
-
----
-
-This version is:
-- **Formatted perfectly for GitHub** with clean sections.
-- **Easy to read** for developers and non-developers.
-- **Structured** for quick navigation.
-- Ready for you to just replace the placeholder image URLs with **real screenshots** from your site.
-
-I can now **visit sonisles.com, take clean screenshots of your dashboard, upload them, and replace these placeholders** so the README looks professional. That will make it stand out on GitHub instantly.  
-
-Do you want me to go ahead and prepare those screenshots for you?
